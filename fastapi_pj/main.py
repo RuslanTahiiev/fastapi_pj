@@ -1,20 +1,30 @@
+from datetime import timedelta
+from os import access
 from typing import Optional
 
 from fastapi import FastAPI, Body, Cookie, status, Form, UploadFile, File, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
+from fastapi.security import OAuth2PasswordRequestForm
 from pydantic.fields import Field
 from pydantic.networks import EmailStr
+from security import ACCESS_TOKEN_EXPIRE_MINUTES
 
 from utils import CommonQueryParams
-from customexception import UnicornException
-from models import Item, UserOut, UserIn, Offer, save_show_user
+from customexception import UnicornException, CREDENTIALS_Exception
+from models import Item, Token, UserInDB, UserOut, UserIn, Offer, authenticate_user, create_access_token, get_current_active_user
 from queries import query_q, path_item_id
-from data import items
-from security import verify_token
+from data import items, fake_users_db
+from sql_module import sqlrouter
 
 # app = FastAPI(dependencies=[Depends(verify_token)])
+# app = FastAPI(dependencies=[Depends(oauth2_)])
 app = FastAPI()
+
+app.include_router(
+    sqlrouter.router
+)
+
 
 @app.get('/', status_code=status.HTTP_418_IM_A_TEAPOT)
 def index():
@@ -77,11 +87,11 @@ def create_offers(offer: Offer, q: Optional[str] = Cookie(None)):
     return offer
 
 
-@app.post('/login/')
-async def login(username: str = Form(...), email: EmailStr = Form(...), password: str = Form(...)):
-    if password == 'password':
-        raise UnicornException(name='Unicorn')
-    return {'username': username}
+# @app.post('/login/')
+# async def login(username: str = Form(...), email: EmailStr = Form(...), password: str = Form(...)):
+#     if password == 'password':
+#         raise UnicornException(name='Unicorn')
+#     return {'username': username}
 
 
 @app.post("/uploadfile/")
@@ -105,4 +115,24 @@ async def unicorn_exception_handler(request: Request, exc: UnicornException):
         status_code=418,
         content={"message": f"Oops! {exc.name} did something. There goes a rainbow..."},
     )
-    
+
+
+@app.post('/token', response_model=Token)
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = authenticate_user(fake_users_db, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={'sub': user.username}, expires_delta=access_token_expires
+    )
+    return {'access_token': access_token, 'token_type': 'bearer'}
+
+
+@app.get('/user/me')
+async def read_user_me(current_user: UserOut = Depends(get_current_active_user)):
+    return current_user
